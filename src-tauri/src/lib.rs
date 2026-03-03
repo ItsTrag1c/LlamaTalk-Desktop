@@ -248,7 +248,7 @@ async fn check_for_update_remote(current_version: String) -> Option<String> {
     let assets = json["assets"].as_array()?;
     let installer = assets.iter().find(|a| {
         a["name"].as_str()
-            .map(|n| n.starts_with("LlamaTalk Desktop_") && n.ends_with("_x64-setup.exe"))
+            .map(|n| (n.starts_with("LlamaTalk Desktop_") || n.starts_with("LlamaTalk.Desktop_")) && n.ends_with("_x64-setup.exe"))
             .unwrap_or(false)
     })?;
     let installer_url = installer["browser_download_url"].as_str()?;
