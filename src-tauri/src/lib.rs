@@ -10,18 +10,27 @@ struct AssistantMenuState {
     item: Arc<Mutex<CheckMenuItem<tauri::Wry>>>,
 }
 
+fn has_path_traversal(path: &str) -> bool {
+    std::path::Path::new(path)
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+}
+
 #[tauri::command]
 fn write_text_file(path: String, content: String) -> Result<(), String> {
+    if has_path_traversal(&path) { return Err("Path traversal not allowed.".to_string()); }
     std::fs::write(&path, content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn read_file_text(path: String) -> Result<String, String> {
+    if has_path_traversal(&path) { return Err("Path traversal not allowed.".to_string()); }
     std::fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn read_file_base64(path: String) -> Result<String, String> {
+    if has_path_traversal(&path) { return Err("Path traversal not allowed.".to_string()); }
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
     Ok(general_purpose::STANDARD.encode(&bytes))
 }
@@ -104,18 +113,59 @@ async fn external_api_post(
 
 #[tauri::command]
 fn open_bundled_doc(app: tauri::AppHandle, filename: String) -> Result<(), String> {
+    // Reject filenames containing path separators or traversal sequences
+    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return Err("Invalid filename.".to_string());
+    }
     let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
-    // Tauri places bundled resources in a "resources" subdirectory alongside the exe
-    let path = resource_dir.join("resources").join(&filename);
+    let base = resource_dir.join("resources");
+    let path = base.join(&filename);
     if !path.exists() {
         return Err(format!("File not found: {}", path.display()));
     }
-    // Open with the system default application (Windows shell)
+    // Canonicalize both paths and confirm the file is inside the resources dir
+    let canonical_path = path.canonicalize().map_err(|e| e.to_string())?;
+    let canonical_base = base.canonicalize().map_err(|e| e.to_string())?;
+    if !canonical_path.starts_with(&canonical_base) {
+        return Err("Path traversal not allowed.".to_string());
+    }
     std::process::Command::new("cmd")
-        .args(["/c", "start", "", path.to_str().unwrap_or_default()])
+        .args(["/c", "start", "", canonical_path.to_str().unwrap_or_default()])
         .spawn()
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+const CRED_SERVICE: &str = "LlamaTalk Desktop";
+
+#[tauri::command]
+fn cred_store(key: String, value: String) -> Result<(), String> {
+    keyring::Entry::new(CRED_SERVICE, &key)
+        .map_err(|e| e.to_string())?
+        .set_password(&value)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn cred_load(key: String) -> Result<Option<String>, String> {
+    let entry = keyring::Entry::new(CRED_SERVICE, &key)
+        .map_err(|e| e.to_string())?;
+    match entry.get_password() {
+        Ok(v) => Ok(Some(v)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+fn cred_delete(key: String) -> Result<(), String> {
+    let entry = keyring::Entry::new(CRED_SERVICE, &key)
+        .map_err(|e| e.to_string())?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 #[tauri::command]
@@ -443,7 +493,10 @@ pub fn run() {
             check_for_update,
             check_for_update_remote,
             download_and_install,
-            launch_installer
+            launch_installer,
+            cred_store,
+            cred_load,
+            cred_delete
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

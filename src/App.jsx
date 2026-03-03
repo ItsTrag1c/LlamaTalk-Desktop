@@ -5,7 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { openPath } from "@tauri-apps/plugin-opener";
 
-const APP_VERSION = "0.8.9";
+const APP_VERSION = "0.9.0";
 const DEFAULT_URL = "http://localhost:11434";
 
 const CLOUD_MODELS = {
@@ -396,25 +396,9 @@ export default function App() {
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState("");
 
-  // Profile / PIN
-  const [isLocked, setIsLocked] = useState(() => {
-    const pinHash = localStorage.getItem("pinHash");
-    const skipped = localStorage.getItem("profileSkipped") === "true";
-    if (!pinHash || skipped) return false;
-    const freq = localStorage.getItem("pinFrequency") || "always";
-    if (freq === "never") return false;
-    if (freq === "30days") {
-      const lastUnlock = Number(localStorage.getItem("lastUnlockTime") || 0);
-      const thirtyDays = 30 * 24 * 60 * 60 * 1000;
-      return Date.now() - lastUnlock > thirtyDays;
-    }
-    return true;
-  });
-  const [showProfileSetup, setShowProfileSetup] = useState(() => {
-    const pinHash = localStorage.getItem("pinHash");
-    const skipped = localStorage.getItem("profileSkipped") === "true";
-    return !pinHash && !skipped;
-  });
+  // Profile / PIN — initial values overridden by credential store startup effect
+  const [isLocked, setIsLocked] = useState(false);
+  const [showProfileSetup, setShowProfileSetup] = useState(false);
   const [profileName, setProfileName] = useState(() => localStorage.getItem("profileName") || "");
   const [setupName, setSetupName] = useState("");
   const [setupPin, setSetupPin] = useState("");
@@ -449,6 +433,13 @@ export default function App() {
   const [fpNewPinConfirm, setFpNewPinConfirm] = useState("");
 
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
+
+  // Credential store: loaded from Windows Credential Manager at startup
+  const [credStoreLoaded, setCredStoreLoaded] = useState(false);
+  const [storedPinHash, setStoredPinHash] = useState(null);
+  const [storedSqHash1, setStoredSqHash1] = useState(null);
+  const [storedSqHash2, setStoredSqHash2] = useState(null);
+  const [storedSqHash3, setStoredSqHash3] = useState(null);
 
   // Onboarding: Ollama URL setup after profile creation
   const [showOllamaSetup, setShowOllamaSetup] = useState(false);
@@ -575,6 +566,81 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("conversations", JSON.stringify(conversations));
   }, [conversations]);
+
+  // Load PIN/SQ hashes from Windows Credential Manager at startup; migrate from localStorage if needed
+  useEffect(() => {
+    async function loadCredentials() {
+      try {
+        const [ph, sh1, sh2, sh3] = await Promise.all([
+          invoke("cred_load", { key: "pinHash" }),
+          invoke("cred_load", { key: "sqHash1" }),
+          invoke("cred_load", { key: "sqHash2" }),
+          invoke("cred_load", { key: "sqHash3" }),
+        ]);
+        const lsPh  = localStorage.getItem("pinHash");
+        const lsSh1 = localStorage.getItem("sqHash1");
+        const lsSh2 = localStorage.getItem("sqHash2");
+        const lsSh3 = localStorage.getItem("sqHash3");
+        let finalPh = ph, finalSh1 = sh1, finalSh2 = sh2, finalSh3 = sh3;
+        // Migrate from localStorage → cred store for any key not yet migrated
+        if (!ph && lsPh) {
+          await invoke("cred_store", { key: "pinHash", value: lsPh });
+          localStorage.removeItem("pinHash");
+          finalPh = lsPh;
+        }
+        if (!sh1 && lsSh1) {
+          await invoke("cred_store", { key: "sqHash1", value: lsSh1 });
+          localStorage.removeItem("sqHash1");
+          finalSh1 = lsSh1;
+        }
+        if (!sh2 && lsSh2) {
+          await invoke("cred_store", { key: "sqHash2", value: lsSh2 });
+          localStorage.removeItem("sqHash2");
+          finalSh2 = lsSh2;
+        }
+        if (!sh3 && lsSh3) {
+          await invoke("cred_store", { key: "sqHash3", value: lsSh3 });
+          localStorage.removeItem("sqHash3");
+          finalSh3 = lsSh3;
+        }
+        // Clean up orphaned cred store entries when no profile exists
+        if (!localStorage.getItem("profileName")) {
+          await Promise.all([
+            invoke("cred_delete", { key: "pinHash" }),
+            invoke("cred_delete", { key: "sqHash1" }),
+            invoke("cred_delete", { key: "sqHash2" }),
+            invoke("cred_delete", { key: "sqHash3" }),
+          ]);
+          finalPh = null; finalSh1 = null; finalSh2 = null; finalSh3 = null;
+        }
+        setStoredPinHash(finalPh);
+        setStoredSqHash1(finalSh1);
+        setStoredSqHash2(finalSh2);
+        setStoredSqHash3(finalSh3);
+        // Determine initial lock/setup state now that hashes are known
+        const skipped = localStorage.getItem("profileSkipped") === "true";
+        if (!finalPh || skipped) {
+          setIsLocked(false);
+          setShowProfileSetup(!finalPh && !skipped);
+        } else {
+          const freq = localStorage.getItem("pinFrequency") || "always";
+          if (freq === "never") {
+            setIsLocked(false);
+          } else if (freq === "30days") {
+            const lastUnlock = Number(localStorage.getItem("lastUnlockTime") || 0);
+            setIsLocked(Date.now() - lastUnlock > 30 * 24 * 60 * 60 * 1000);
+          } else {
+            setIsLocked(true);
+          }
+          setShowProfileSetup(false);
+        }
+      } catch (e) {
+        console.error("Credential store load failed:", e);
+      }
+      setCredStoreLoaded(true);
+    }
+    loadCredentials();
+  }, []);
 
   // Remote update check — fires once at startup, non-blocking
   useEffect(() => {
@@ -972,15 +1038,21 @@ export default function App() {
     const ah1 = await hashAnswer(sa1);
     const ah2 = await hashAnswer(sa2);
     const ah3 = await hashAnswer(sa3);
-    localStorage.setItem("pinHash", hash);
+    await Promise.all([
+      invoke("cred_store", { key: "pinHash", value: hash }),
+      invoke("cred_store", { key: "sqHash1", value: ah1 }),
+      invoke("cred_store", { key: "sqHash2", value: ah2 }),
+      invoke("cred_store", { key: "sqHash3", value: ah3 }),
+    ]);
     localStorage.setItem("profileName", setupName.trim());
     localStorage.setItem("profileSkipped", "false");
     localStorage.setItem("sqIndex1", String(sq1));
     localStorage.setItem("sqIndex2", String(sq2));
     localStorage.setItem("sqIndex3", String(sq3));
-    localStorage.setItem("sqHash1", ah1);
-    localStorage.setItem("sqHash2", ah2);
-    localStorage.setItem("sqHash3", ah3);
+    setStoredPinHash(hash);
+    setStoredSqHash1(ah1);
+    setStoredSqHash2(ah2);
+    setStoredSqHash3(ah3);
     setProfileName(setupName.trim());
     setSetupName(""); setSetupPin(""); setSetupPinConfirm("");
     setSa1(""); setSa2(""); setSa3("");
@@ -1024,10 +1096,13 @@ export default function App() {
   async function doUnlock() {
     setLockError("");
     if (!lockPin) { setLockError("Please enter your PIN."); return; }
-    const stored = localStorage.getItem("pinHash");
+    const stored = storedPinHash;
     const { verified, needsMigration, newHash } = await verifyPin(lockPin, stored);
     if (verified) {
-      if (needsMigration) localStorage.setItem("pinHash", newHash);
+      if (needsMigration) {
+        await invoke("cred_store", { key: "pinHash", value: newHash });
+        setStoredPinHash(newHash);
+      }
       localStorage.setItem("lastUnlockTime", Date.now().toString());
       setIsLocked(false);
       setLockPin("");
@@ -1038,8 +1113,7 @@ export default function App() {
   }
 
   function doLockApp() {
-    const pinHash = localStorage.getItem("pinHash");
-    if (pinHash) {
+    if (storedPinHash) {
       setForgotPinMode(false);
       setFpResetMode(false);
       setFpa1("");
@@ -1052,7 +1126,7 @@ export default function App() {
     setFpError("");
     if (!fpa1.trim()) { setFpError("Please enter your answer."); return; }
     const ah = await hashAnswer(fpa1);
-    const stored = localStorage.getItem(`sqHash${fpQuestionIndex + 1}`);
+    const stored = [storedSqHash1, storedSqHash2, storedSqHash3][fpQuestionIndex];
     if (ah !== stored) {
       setFpError("Incorrect answer. Try refreshing for a different question.");
       return;
@@ -1073,7 +1147,8 @@ export default function App() {
     if (!/^\d+$/.test(fpNewPin)) { setFpError("PIN must contain only numbers."); return; }
     if (fpNewPin !== fpNewPinConfirm) { setFpError("PINs do not match."); return; }
     const hash = await hashPin(fpNewPin);
-    localStorage.setItem("pinHash", hash);
+    await invoke("cred_store", { key: "pinHash", value: hash });
+    setStoredPinHash(hash);
     setForgotPinMode(false);
     setFpResetMode(false);
     setFpa1("");
@@ -1085,7 +1160,7 @@ export default function App() {
   async function doExportProfile() {
     const profile = {
       profileName: localStorage.getItem("profileName") || "",
-      pinHash: localStorage.getItem("pinHash") || "",
+      pinHash: storedPinHash || "",
       systemPrompt: localStorage.getItem("systemPrompt") || "",
       modelPrompts: localStorage.getItem("modelPrompts") || "{}",
       ollamaUrl: localStorage.getItem("ollamaUrl") || DEFAULT_URL,
@@ -1098,9 +1173,9 @@ export default function App() {
       sqIndex1: localStorage.getItem("sqIndex1") || "0",
       sqIndex2: localStorage.getItem("sqIndex2") || "1",
       sqIndex3: localStorage.getItem("sqIndex3") || "2",
-      sqHash1: localStorage.getItem("sqHash1") || "",
-      sqHash2: localStorage.getItem("sqHash2") || "",
-      sqHash3: localStorage.getItem("sqHash3") || "",
+      sqHash1: storedSqHash1 || "",
+      sqHash2: storedSqHash2 || "",
+      sqHash3: storedSqHash3 || "",
     };
     try {
       const path = await save({
@@ -1123,7 +1198,7 @@ export default function App() {
       const text = await invoke("read_file_text", { path });
       const p = JSON.parse(text);
       validateProfileJson(p);
-      if (p.pinHash) localStorage.setItem("pinHash", p.pinHash);
+      if (p.pinHash) { await invoke("cred_store", { key: "pinHash", value: p.pinHash }); setStoredPinHash(p.pinHash); }
       if (p.profileName) { localStorage.setItem("profileName", p.profileName); setProfileName(p.profileName); }
       if (p.systemPrompt !== undefined) { localStorage.setItem("systemPrompt", p.systemPrompt); setSystemPrompt(p.systemPrompt); setDraftPrompt(p.systemPrompt); }
       if (p.ollamaUrl) { localStorage.setItem("ollamaUrl", p.ollamaUrl); setOllamaUrl(p.ollamaUrl); }
@@ -1150,9 +1225,9 @@ export default function App() {
       if (p.sqIndex1 !== undefined) localStorage.setItem("sqIndex1", p.sqIndex1);
       if (p.sqIndex2 !== undefined) localStorage.setItem("sqIndex2", p.sqIndex2);
       if (p.sqIndex3 !== undefined) localStorage.setItem("sqIndex3", p.sqIndex3);
-      if (p.sqHash1) localStorage.setItem("sqHash1", p.sqHash1);
-      if (p.sqHash2) localStorage.setItem("sqHash2", p.sqHash2);
-      if (p.sqHash3) localStorage.setItem("sqHash3", p.sqHash3);
+      if (p.sqHash1) { await invoke("cred_store", { key: "sqHash1", value: p.sqHash1 }); setStoredSqHash1(p.sqHash1); }
+      if (p.sqHash2) { await invoke("cred_store", { key: "sqHash2", value: p.sqHash2 }); setStoredSqHash2(p.sqHash2); }
+      if (p.sqHash3) { await invoke("cred_store", { key: "sqHash3", value: p.sqHash3 }); setStoredSqHash3(p.sqHash3); }
       localStorage.setItem("profileSkipped", "false");
       setShowProfileSetup(false);
       setShowOllamaSetup(false);
@@ -1163,14 +1238,15 @@ export default function App() {
   async function doChangePin() {
     setCpError(""); setCpSaved(false);
     if (!cpOld) { setCpError("Enter your current PIN."); return; }
-    const stored = localStorage.getItem("pinHash");
+    const stored = storedPinHash;
     const { verified } = await verifyPin(cpOld, stored);
     if (!verified) { setCpError("Current PIN is incorrect."); return; }
     if (cpNew.length < 4) { setCpError("New PIN must be at least 4 digits."); return; }
     if (!/^\d+$/.test(cpNew)) { setCpError("PIN must contain only numbers."); return; }
     if (cpNew !== cpConfirm) { setCpError("New PINs do not match."); return; }
     const newHash = await hashPin(cpNew);
-    localStorage.setItem("pinHash", newHash);
+    await invoke("cred_store", { key: "pinHash", value: newHash });
+    setStoredPinHash(newHash);
     setCpOld(""); setCpNew(""); setCpConfirm("");
     setCpSaved(true);
     setTimeout(() => { setCpSaved(false); setChangePinMode(false); setProfileDropdownOpen(false); }, 2000);
@@ -1197,10 +1273,16 @@ export default function App() {
       try { existing = await invoke("read_file_text", { path: logPath }); } catch { existing = ""; }
       await invoke("write_text_file", { path: logPath, content: existing + entry });
     } catch { /* silently ignore log errors */ }
-    localStorage.removeItem("pinHash");
+    await Promise.all([
+      invoke("cred_delete", { key: "pinHash" }),
+      invoke("cred_delete", { key: "sqHash1" }),
+      invoke("cred_delete", { key: "sqHash2" }),
+      invoke("cred_delete", { key: "sqHash3" }),
+    ]);
+    setStoredPinHash(null);
+    setStoredSqHash1(null); setStoredSqHash2(null); setStoredSqHash3(null);
     localStorage.removeItem("profileName");
     localStorage.removeItem("sqIndex1"); localStorage.removeItem("sqIndex2"); localStorage.removeItem("sqIndex3");
-    localStorage.removeItem("sqHash1"); localStorage.removeItem("sqHash2"); localStorage.removeItem("sqHash3");
     localStorage.removeItem("pinFrequency");
     localStorage.removeItem("lastUnlockTime");
     localStorage.removeItem("lastExportTime");
@@ -1452,6 +1534,11 @@ export default function App() {
   const canSend = input.trim().length > 0 && !!selectedModel && !isStreaming &&
     (isCloudModel || ollamaStatus === "connected");
 
+  // Show blank screen while credential store is loading to avoid flash of wrong state
+  if (!credStoreLoaded) {
+    return <div style={{ background: "var(--bg-base)", height: "100vh" }} />;
+  }
+
   return (
     <div className="app-root">
       <div className="titlebar" data-tauri-drag-region>
@@ -1634,7 +1721,7 @@ export default function App() {
             <input className="profile-input" type="password" inputMode="numeric" placeholder="PIN" value={lockPin} onChange={(e) => setLockPin(e.target.value.replace(/\D/g, ""))} maxLength={8} autoFocus onKeyDown={(e) => { if (e.key === "Enter") doUnlock(); }} />
             {lockError && <div className="profile-error">{lockError}</div>}
             <button className="profile-btn" onClick={doUnlock}>Unlock</button>
-            {localStorage.getItem("sqHash1") && (
+            {storedSqHash1 && (
               <button className="profile-btn-link" onClick={() => {
                 setFpQuestionIndex(Math.floor(Math.random() * 3));
                 setFpa1(""); setFpError("");
