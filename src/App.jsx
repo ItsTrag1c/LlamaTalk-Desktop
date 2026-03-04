@@ -6,7 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { openPath } from "@tauri-apps/plugin-opener";
 
-const APP_VERSION = "0.11.1";
+const APP_VERSION = "0.11.2";
 const DEFAULT_URL = "http://localhost:11434";
 
 const CLOUD_MODELS = {
@@ -957,7 +957,7 @@ export default function App() {
 
   async function fetchModels(url, detectedBackend) {
     const target = normalizeUrl(url ?? ollamaUrl);
-    const bt = detectedBackend || backendType;
+    let bt = detectedBackend || backendType;
     setOllamaStatus("checking");
     try {
       let list;
@@ -970,6 +970,24 @@ export default function App() {
         const data = JSON.parse(text);
         list = (data.models || []).map((m) => m.name);
       }
+      // If no explicit detection was passed and we're using default "ollama",
+      // auto-detect backend so streaming uses the right format
+      if (!detectedBackend && bt === "ollama") {
+        try {
+          const detected = await invoke("detect_backend", { url: target });
+          if (detected !== bt) {
+            bt = detected;
+            setBackendType(detected);
+            localStorage.setItem("backendType", detected);
+            // Re-fetch models with correct backend if type changed
+            if (detected === "openai-compatible") {
+              const text2 = await invoke("ollama_get", { url: `${target}/v1/models` });
+              const data2 = JSON.parse(text2);
+              list = (data2.data || []).map((m) => m.id);
+            }
+          }
+        } catch { /* detection failed, keep current type */ }
+      }
       setModels(list);
       setSelectedModel((prev) => {
         // Keep current selection if it's still available on the server
@@ -981,6 +999,17 @@ export default function App() {
       });
       setOllamaStatus("connected");
     } catch {
+      // If default "ollama" failed, try auto-detecting and retrying
+      if (!detectedBackend && bt === "ollama") {
+        try {
+          const detected = await invoke("detect_backend", { url: target });
+          if (detected !== "unknown" && detected !== "ollama") {
+            setBackendType(detected);
+            localStorage.setItem("backendType", detected);
+            return fetchModels(url, detected);
+          }
+        } catch { /* detection also failed */ }
+      }
       setOllamaStatus("error");
     }
   }

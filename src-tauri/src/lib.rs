@@ -404,10 +404,27 @@ async fn detect_backend(url: String) -> Result<String, String> {
         .build()
         .map_err(|e| e.to_string())?;
 
-    // Try Ollama endpoint first
+    // Try Ollama endpoint first — validate body contains a "models" array
+    // so llama.cpp servers that return 200 but non-Ollama payloads are not
+    // misidentified as native Ollama.
     if let Ok(res) = client.get(format!("{}/api/tags", base)).send().await {
         if res.status().is_success() {
-            return Ok("ollama".to_string());
+            if let Ok(body) = res.text().await {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+                    if v.get("models").and_then(|m| m.as_array()).is_some() {
+                        // Looks like genuine Ollama — but also probe /v1/models.
+                        // If BOTH respond, prefer openai-compatible when the /api/chat
+                        // streaming format is more likely SSE (llama.cpp pattern).
+                        // A real Ollama server won't serve /v1/models, so this is safe.
+                        if let Ok(oai_res) = client.get(format!("{}/v1/models", base)).send().await {
+                            if oai_res.status().is_success() {
+                                return Ok("openai-compatible".to_string());
+                            }
+                        }
+                        return Ok("ollama".to_string());
+                    }
+                }
+            }
         }
     }
 
@@ -554,9 +571,26 @@ async fn stream_chat_inner(
 fn extract_token(line: &str, provider_type: &str) -> Option<String> {
     match provider_type {
         "ollama" => {
-            // NDJSON: each line is a JSON object
-            let v: serde_json::Value = serde_json::from_str(line).ok()?;
-            v["message"]["content"].as_str().map(|s| s.to_string())
+            // NDJSON: each line is a JSON object with message.content
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                if let Some(s) = v["message"]["content"].as_str() {
+                    return Some(s.to_string());
+                }
+            }
+            // Fallback: llama.cpp may send SSE format (data: {...}) even on /api/chat
+            if let Some(data) = line.strip_prefix("data: ") {
+                if data == "[DONE]" { return None; }
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                    if let Some(s) = v["choices"][0]["delta"]["content"].as_str() {
+                        return Some(s.to_string());
+                    }
+                    // Also try message.content inside SSE wrapper
+                    if let Some(s) = v["message"]["content"].as_str() {
+                        return Some(s.to_string());
+                    }
+                }
+            }
+            None
         }
         "openai-compatible" | "openai" => {
             // SSE: lines start with "data: "
@@ -591,10 +625,15 @@ fn is_stream_done(line: &str, provider_type: &str) -> bool {
     match provider_type {
         "ollama" => {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                v["done"].as_bool() == Some(true)
-            } else {
-                false
+                if v["done"].as_bool() == Some(true) {
+                    return true;
+                }
             }
+            // Fallback: llama.cpp may send SSE-style [DONE] even on /api/chat
+            if let Some(data) = line.strip_prefix("data: ") {
+                return data == "[DONE]";
+            }
+            false
         }
         "openai-compatible" | "openai" => {
             line.strip_prefix("data: ").map(|d| d == "[DONE]").unwrap_or(false)
