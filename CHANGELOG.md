@@ -4,6 +4,13 @@ A running history of all features, fixes, and improvements made to LlamaTalk Des
 
 ---
 
+## v0.9.2 — 2026-03-03
+
+### Fixes
+- **Profile now persists after closing the app** — Fixed a bug where all profile data (name, PIN, security questions, settings) was lost every time the app was closed. The app was using an abrupt process termination that didn't give the browser engine time to save localStorage to disk. All exit paths now use a graceful shutdown so your data is reliably written before the process ends.
+
+---
+
 ## v0.9.1 — 2026-03-03
 
 ### Housekeeping
