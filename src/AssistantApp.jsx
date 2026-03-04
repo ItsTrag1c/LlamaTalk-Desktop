@@ -283,6 +283,11 @@ export default function AssistantApp() {
         }
       });
 
+      const unlistenUsage = await listen("chat-usage", (event) => {
+        if (event.payload.id !== streamId) return;
+        // Usage data available — could be used for display in the future
+      });
+
       const streamDone = new Promise((resolve, reject) => {
         let unDone, unErr;
         const cleanup = () => { unDone?.then?.(u => u()); unErr?.then?.(u => u()); };
@@ -316,6 +321,7 @@ export default function AssistantApp() {
       updateContent(fullContent);
 
       unlistenToken();
+      unlistenUsage();
       streamIdRef.current = null;
 
       // Sync completed conversation to main app

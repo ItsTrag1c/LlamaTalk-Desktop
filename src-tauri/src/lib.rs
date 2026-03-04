@@ -455,6 +455,14 @@ struct ChatErrorPayload {
     error: String,
 }
 
+#[derive(Clone, serde::Serialize)]
+struct ChatUsagePayload {
+    id: String,
+    prompt_tokens: u64,
+    output_tokens: u64,
+    eval_duration_ns: Option<u64>,
+}
+
 #[tauri::command]
 async fn stream_chat(
     window: tauri::WebviewWindow,
@@ -485,7 +493,10 @@ async fn stream_chat(
     }
 
     match result {
-        Ok(()) => {
+        Ok(usage) => {
+            if let Some(u) = usage {
+                let _ = window.app_handle().emit("chat-usage", u);
+            }
             let _ = window.app_handle().emit("chat-done", ChatDonePayload { id: stream_id });
             Ok(())
         }
@@ -509,7 +520,7 @@ async fn stream_chat_inner(
     provider_type: &str,
     stream_id: &str,
     cancel_flag: &Arc<AtomicBool>,
-) -> Result<(), String> {
+) -> Result<Option<ChatUsagePayload>, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .build()
@@ -531,6 +542,10 @@ async fn stream_chat_inner(
 
     let mut stream = res.bytes_stream();
     let mut line_buf = String::new();
+    let mut usage_prompt: u64 = 0;
+    let mut usage_output: u64 = 0;
+    let mut usage_eval_ns: Option<u64> = None;
+    let mut has_usage = false;
 
     while let Some(chunk) = stream.next().await {
         if cancel_flag.load(Ordering::Relaxed) {
@@ -558,14 +573,37 @@ async fn stream_chat_inner(
                 }
             }
 
+            // Extract usage data per provider
+            extract_usage(&line, provider_type, &mut usage_prompt, &mut usage_output, &mut usage_eval_ns, &mut has_usage);
+
             // Check for stream end
             if is_stream_done(&line, provider_type) {
-                return Ok(());
+                let usage = if has_usage {
+                    Some(ChatUsagePayload {
+                        id: stream_id.to_string(),
+                        prompt_tokens: usage_prompt,
+                        output_tokens: usage_output,
+                        eval_duration_ns: usage_eval_ns,
+                    })
+                } else {
+                    None
+                };
+                return Ok(usage);
             }
         }
     }
 
-    Ok(())
+    let usage = if has_usage {
+        Some(ChatUsagePayload {
+            id: stream_id.to_string(),
+            prompt_tokens: usage_prompt,
+            output_tokens: usage_output,
+            eval_duration_ns: usage_eval_ns,
+        })
+    } else {
+        None
+    };
+    Ok(usage)
 }
 
 fn extract_token(line: &str, provider_type: &str) -> Option<String> {
@@ -651,6 +689,69 @@ fn is_stream_done(line: &str, provider_type: &str) -> bool {
         }
         "google" => false, // Google SSE ends when the stream closes
         _ => false,
+    }
+}
+
+fn extract_usage(
+    line: &str,
+    provider_type: &str,
+    prompt: &mut u64,
+    output: &mut u64,
+    eval_ns: &mut Option<u64>,
+    has_usage: &mut bool,
+) {
+    match provider_type {
+        "ollama" => {
+            // On the done:true line, Ollama includes eval_count, prompt_eval_count, eval_duration
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                if v["done"].as_bool() == Some(true) {
+                    if let Some(n) = v["prompt_eval_count"].as_u64() { *prompt = n; *has_usage = true; }
+                    if let Some(n) = v["eval_count"].as_u64() { *output = n; *has_usage = true; }
+                    if let Some(n) = v["eval_duration"].as_u64() { *eval_ns = Some(n); }
+                }
+            }
+        }
+        "anthropic" => {
+            if let Some(data) = line.strip_prefix("data: ") {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                    // message_start contains input_tokens
+                    if v["type"].as_str() == Some("message_start") {
+                        if let Some(n) = v["message"]["usage"]["input_tokens"].as_u64() {
+                            *prompt = n; *has_usage = true;
+                        }
+                    }
+                    // message_delta contains output_tokens
+                    if v["type"].as_str() == Some("message_delta") {
+                        if let Some(n) = v["usage"]["output_tokens"].as_u64() {
+                            *output = n; *has_usage = true;
+                        }
+                    }
+                }
+            }
+        }
+        "openai" | "openai-compatible" => {
+            if let Some(data) = line.strip_prefix("data: ") {
+                if data != "[DONE]" {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                        if let Some(u) = v.get("usage") {
+                            if let Some(n) = u["prompt_tokens"].as_u64() { *prompt = n; *has_usage = true; }
+                            if let Some(n) = u["completion_tokens"].as_u64() { *output = n; *has_usage = true; }
+                        }
+                    }
+                }
+            }
+        }
+        "google" => {
+            if let Some(data) = line.strip_prefix("data: ") {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                    if let Some(meta) = v.get("usageMetadata") {
+                        if let Some(n) = meta["promptTokenCount"].as_u64() { *prompt = n; *has_usage = true; }
+                        if let Some(n) = meta["candidatesTokenCount"].as_u64() { *output = n; *has_usage = true; }
+                    }
+                }
+            }
+        }
+        _ => {}
     }
 }
 

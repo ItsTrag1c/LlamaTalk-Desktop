@@ -6,7 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { openPath } from "@tauri-apps/plugin-opener";
 
-const APP_VERSION = "0.11.2";
+const APP_VERSION = "0.12.0";
 const DEFAULT_URL = "http://localhost:11434";
 
 const CLOUD_MODELS = {
@@ -504,6 +504,9 @@ export default function App() {
   const textareaRef = useRef(null);
   const abortRef = useRef(null);
   const streamIdRef = useRef(null);
+  const streamTokenCountRef = useRef(0);
+  const streamStartRef = useRef(null);
+  const [streamStats, setStreamStats] = useState(null);
   const closeMinimiesToTrayRef = useRef(closeMinimiesToTray);
   const profileDropdownRef = useRef(null);
 
@@ -860,10 +863,11 @@ export default function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Reset displayFrom and open menu when switching conversations
+  // Reset displayFrom, open menu, and stream stats when switching conversations
   useEffect(() => {
     setDisplayFrom(0);
     setOpenMenuMsgId(null);
+    setStreamStats(null);
   }, [currentConvId]);
 
   // Reset URL check status when draft URL changes
@@ -1616,8 +1620,13 @@ export default function App() {
           ["Authorization", `Bearer ${apiKeys.openai}`],
           ["content-type", "application/json"],
         ]);
-        streamBody = JSON.stringify({ model: selectedModel, messages: apiMessages, temperature, stream: true });
+        streamBody = JSON.stringify({ model: selectedModel, messages: apiMessages, temperature, stream: true, stream_options: { include_usage: true } });
       }
+
+      // Reset stream stats
+      streamTokenCountRef.current = 0;
+      streamStartRef.current = Date.now();
+      setStreamStats(null);
 
       // Token buffer for wordDelay throttling
       let fullContent = "";
@@ -1637,6 +1646,7 @@ export default function App() {
       // Listen for streaming events
       const unlistenToken = await listen("chat-token", (event) => {
         if (event.payload.id !== streamId) return;
+        streamTokenCountRef.current++;
         const token = event.payload.token;
         if (wordDelay > 0) {
           tokenQueue.push(token);
@@ -1672,6 +1682,22 @@ export default function App() {
         });
       });
 
+      // Listen for usage data from Rust
+      let usageData = null;
+      const unlistenUsage = await listen("chat-usage", (event) => {
+        if (event.payload.id !== streamId) return;
+        usageData = event.payload;
+      });
+
+      // Real-time TK/S update interval
+      const tksInterval = setInterval(() => {
+        const count = streamTokenCountRef.current;
+        const elapsed = (Date.now() - streamStartRef.current) / 1000;
+        if (count > 0 && elapsed > 0) {
+          setStreamStats({ tokens: count, tks: (count / elapsed).toFixed(1) });
+        }
+      }, 250);
+
       // Fire the streaming request (runs in background on Rust side)
       invoke("stream_chat", {
         url: streamUrl, headers: streamHeaders, body: streamBody,
@@ -1685,6 +1711,8 @@ export default function App() {
         if (!abortRef.current.signal.aborted) throw err;
       }
 
+      clearInterval(tksInterval);
+
       // Flush any remaining buffered tokens
       if (drainTimer) clearInterval(drainTimer);
       while (tokenQueue.length > 0) {
@@ -1693,7 +1721,28 @@ export default function App() {
       updateContent(fullContent);
 
       unlistenToken();
+      unlistenUsage();
       streamIdRef.current = null;
+
+      // Compute final stats using actual API data when available
+      if (usageData) {
+        const outputTokens = usageData.output_tokens;
+        let tks;
+        if (usageData.eval_duration_ns && usageData.eval_duration_ns > 0) {
+          tks = (outputTokens / (usageData.eval_duration_ns / 1e9)).toFixed(1);
+        } else {
+          const elapsed = (Date.now() - streamStartRef.current) / 1000;
+          tks = elapsed > 0 ? (outputTokens / elapsed).toFixed(1) : "0.0";
+        }
+        setStreamStats({ tokens: outputTokens, tks });
+      } else {
+        // Fallback to event-counted tokens
+        const count = streamTokenCountRef.current;
+        const elapsed = (Date.now() - streamStartRef.current) / 1000;
+        if (count > 0 && elapsed > 0) {
+          setStreamStats({ tokens: count, tks: (count / elapsed).toFixed(1) });
+        }
+      }
 
       if (fullContent) {
         try {
@@ -2488,7 +2537,11 @@ export default function App() {
           )}
           <div className="token-counter">
             <IconCoin />
-            <span>{contextTokens.toLocaleString()} tokens</span>
+            {streamStats ? (
+              <span>{streamStats.tokens.toLocaleString()} tokens · {streamStats.tks} tk/s</span>
+            ) : (
+              <span>{contextTokens.toLocaleString()} tokens</span>
+            )}
           </div>
           {selectedModel && (
             <div className="input-privacy-notice">
