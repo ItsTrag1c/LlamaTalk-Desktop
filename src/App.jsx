@@ -5,7 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { openPath } from "@tauri-apps/plugin-opener";
 
-const APP_VERSION = "0.9.0";
+const APP_VERSION = "0.10.0";
 const DEFAULT_URL = "http://localhost:11434";
 
 const CLOUD_MODELS = {
@@ -105,7 +105,9 @@ function genId() {
 
 function loadConversations() {
   try {
-    return JSON.parse(localStorage.getItem("conversations") || "[]");
+    const raw = localStorage.getItem("conversations") || "[]";
+    if (isEncryptedConvPayload(raw)) return []; // decrypted async after credential load
+    return JSON.parse(raw);
   } catch {
     return [];
   }
@@ -161,6 +163,40 @@ async function hashAnswer(answer) {
   return Array.from(new Uint8Array(buf))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+// --- Conversation encryption helpers (AES-256-GCM, key in Windows Credential Manager) ---
+
+async function generateConvKey() {
+  const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+  const raw = await crypto.subtle.exportKey("raw", key);
+  return Array.from(new Uint8Array(raw)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function importConvKey(hex) {
+  const bytes = new Uint8Array(hex.match(/.{2}/g).map(b => parseInt(b, 16)));
+  return crypto.subtle.importKey("raw", bytes, "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+
+async function encryptConversations(jsonStr, cryptoKey) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encoded = new TextEncoder().encode(jsonStr);
+  const cipherBuf = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, cryptoKey, encoded);
+  const ivHex = Array.from(iv).map(b => b.toString(16).padStart(2, "0")).join("");
+  const ctHex = Array.from(new Uint8Array(cipherBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
+  return `enc_v1:${ivHex}:${ctHex}`;
+}
+
+async function decryptConversations(payload, cryptoKey) {
+  const [, ivHex, ctHex] = payload.split(":");
+  const iv = new Uint8Array(ivHex.match(/.{2}/g).map(b => parseInt(b, 16)));
+  const ct = new Uint8Array(ctHex.match(/.{2}/g).map(b => parseInt(b, 16)));
+  const plainBuf = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, cryptoKey, ct);
+  return new TextDecoder().decode(plainBuf);
+}
+
+function isEncryptedConvPayload(str) {
+  return typeof str === "string" && str.startsWith("enc_v1:");
 }
 
 const SECURITY_QUESTIONS = [
@@ -436,6 +472,7 @@ export default function App() {
 
   // Credential store: loaded from Windows Credential Manager at startup
   const [credStoreLoaded, setCredStoreLoaded] = useState(false);
+  const [convCryptoKey, setConvCryptoKey] = useState(null);
   const [storedPinHash, setStoredPinHash] = useState(null);
   const [storedSqHash1, setStoredSqHash1] = useState(null);
   const [storedSqHash2, setStoredSqHash2] = useState(null);
@@ -562,20 +599,27 @@ export default function App() {
     return () => document.removeEventListener("mousedown", handleOutside);
   }, [profileDropdownOpen]);
 
-  // Persist conversations
+  // Persist conversations (encrypted if key available)
   useEffect(() => {
-    localStorage.setItem("conversations", JSON.stringify(conversations));
-  }, [conversations]);
+    if (convCryptoKey) {
+      encryptConversations(JSON.stringify(conversations), convCryptoKey)
+        .then(encrypted => localStorage.setItem("conversations", encrypted))
+        .catch(() => {}); // don't corrupt data on error
+    } else {
+      localStorage.setItem("conversations", JSON.stringify(conversations));
+    }
+  }, [conversations, convCryptoKey]);
 
   // Load PIN/SQ hashes from Windows Credential Manager at startup; migrate from localStorage if needed
   useEffect(() => {
     async function loadCredentials() {
       try {
-        const [ph, sh1, sh2, sh3] = await Promise.all([
+        const [ph, sh1, sh2, sh3, cek] = await Promise.all([
           invoke("cred_load", { key: "pinHash" }),
           invoke("cred_load", { key: "sqHash1" }),
           invoke("cred_load", { key: "sqHash2" }),
           invoke("cred_load", { key: "sqHash3" }),
+          invoke("cred_load", { key: "convEncKey" }),
         ]);
         const lsPh  = localStorage.getItem("pinHash");
         const lsSh1 = localStorage.getItem("sqHash1");
@@ -610,8 +654,30 @@ export default function App() {
             invoke("cred_delete", { key: "sqHash1" }),
             invoke("cred_delete", { key: "sqHash2" }),
             invoke("cred_delete", { key: "sqHash3" }),
+            invoke("cred_delete", { key: "convEncKey" }),
           ]);
           finalPh = null; finalSh1 = null; finalSh2 = null; finalSh3 = null;
+        }
+        // Conversation encryption key — migrate existing users, decrypt conversations
+        let finalCek = cek;
+        if (!localStorage.getItem("profileName")) {
+          finalCek = null;
+        } else if (finalPh && !finalCek) {
+          // Existing user with PIN but no conv key — generate one (migration)
+          const hex = await generateConvKey();
+          await invoke("cred_store", { key: "convEncKey", value: hex });
+          finalCek = hex;
+        }
+        if (finalCek) {
+          try {
+            const key = await importConvKey(finalCek);
+            setConvCryptoKey(key);
+            const raw = localStorage.getItem("conversations") || "[]";
+            if (isEncryptedConvPayload(raw)) {
+              const json = await decryptConversations(raw, key);
+              setConversations(JSON.parse(json));
+            }
+          } catch { /* decryption failed — conversations stay as loaded */ }
         }
         setStoredPinHash(finalPh);
         setStoredSqHash1(finalSh1);
@@ -1053,6 +1119,11 @@ export default function App() {
     setStoredSqHash1(ah1);
     setStoredSqHash2(ah2);
     setStoredSqHash3(ah3);
+    // Generate conversation encryption key
+    const convKeyHex = await generateConvKey();
+    await invoke("cred_store", { key: "convEncKey", value: convKeyHex });
+    const convKey = await importConvKey(convKeyHex);
+    setConvCryptoKey(convKey);
     setProfileName(setupName.trim());
     setSetupName(""); setSetupPin(""); setSetupPinConfirm("");
     setSa1(""); setSa2(""); setSa3("");
@@ -1229,6 +1300,13 @@ export default function App() {
       if (p.sqHash2) { await invoke("cred_store", { key: "sqHash2", value: p.sqHash2 }); setStoredSqHash2(p.sqHash2); }
       if (p.sqHash3) { await invoke("cred_store", { key: "sqHash3", value: p.sqHash3 }); setStoredSqHash3(p.sqHash3); }
       localStorage.setItem("profileSkipped", "false");
+      // Generate new conv encryption key for imported profile with PIN
+      if (p.pinHash) {
+        const convKeyHex = await generateConvKey();
+        await invoke("cred_store", { key: "convEncKey", value: convKeyHex });
+        const key = await importConvKey(convKeyHex);
+        setConvCryptoKey(key);
+      }
       setShowProfileSetup(false);
       setShowOllamaSetup(false);
       alert("Profile imported successfully!");
@@ -1278,7 +1356,10 @@ export default function App() {
       invoke("cred_delete", { key: "sqHash1" }),
       invoke("cred_delete", { key: "sqHash2" }),
       invoke("cred_delete", { key: "sqHash3" }),
+      invoke("cred_delete", { key: "convEncKey" }),
     ]);
+    setConvCryptoKey(null);
+    localStorage.setItem("conversations", JSON.stringify(conversations)); // plaintext
     setStoredPinHash(null);
     setStoredSqHash1(null); setStoredSqHash2(null); setStoredSqHash3(null);
     localStorage.removeItem("profileName");
@@ -2014,6 +2095,11 @@ export default function App() {
                 )}
               </div>
             ))}
+            <div className="settings-api-note">
+              API keys are stored locally on this device only. They are sent exclusively
+              to their respective AI provider over HTTPS and are never included in
+              profile exports.
+            </div>
 
             <div className="settings-divider" />
             <div className="settings-label">Model Display Name</div>

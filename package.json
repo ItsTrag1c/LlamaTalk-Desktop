@@ -1,7 +1,7 @@
 {
   "name": "llamachatv1",
   "private": true,
-  "version": "0.9.2",
+  "version": "0.10.0",
   "author": "ItsTrag1c",
   "type": "module",
   "scripts": {

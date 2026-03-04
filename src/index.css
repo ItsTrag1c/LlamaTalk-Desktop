@@ -1354,6 +1354,13 @@ html[data-theme="light"] .sidebar-version {
   margin-top: 0;
 }
 
+.settings-api-note {
+  font-size: 11px;
+  opacity: 0.5;
+  line-height: 1.4;
+  margin-top: 4px;
+}
+
 .settings-doc-links {
   display: flex;
   flex-direction: column;
