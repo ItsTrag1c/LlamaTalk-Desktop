@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=llamaChat
+Comment=Chat with local Ollama models
+Exec=llamachatv1
+Icon=com.claudetractor.llamachatv1
+Terminal=false
+Categories=Utility;Network;

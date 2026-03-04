@@ -6,7 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { openPath } from "@tauri-apps/plugin-opener";
 
-const APP_VERSION = "0.11.0";
+const APP_VERSION = "0.11.1";
 const DEFAULT_URL = "http://localhost:11434";
 
 const CLOUD_MODELS = {

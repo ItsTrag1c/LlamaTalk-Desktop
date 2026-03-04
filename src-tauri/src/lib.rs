@@ -469,15 +469,15 @@ async fn stream_chat(
 
     match result {
         Ok(()) => {
-            let _ = window.emit("chat-done", ChatDonePayload { id: stream_id });
+            let _ = window.app_handle().emit("chat-done", ChatDonePayload { id: stream_id });
             Ok(())
         }
         Err(e) => {
             if cancel_flag.load(Ordering::Relaxed) {
-                let _ = window.emit("chat-done", ChatDonePayload { id: stream_id });
+                let _ = window.app_handle().emit("chat-done", ChatDonePayload { id: stream_id });
                 Ok(())
             } else {
-                let _ = window.emit("chat-error", ChatErrorPayload { id: stream_id.clone(), error: e.clone() });
+                let _ = window.app_handle().emit("chat-error", ChatErrorPayload { id: stream_id.clone(), error: e.clone() });
                 Err(e)
             }
         }
@@ -534,7 +534,7 @@ async fn stream_chat_inner(
 
             if let Some(token) = extract_token(&line, provider_type) {
                 if !token.is_empty() {
-                    let _ = window.emit("chat-token", ChatTokenPayload {
+                    let _ = window.app_handle().emit("chat-token", ChatTokenPayload {
                         id: stream_id.to_string(),
                         token,
                     });

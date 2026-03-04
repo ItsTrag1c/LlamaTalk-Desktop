@@ -1,0 +1,39 @@
+app-id: com.claudetractor.llamachatv1
+runtime: org.gnome.Platform
+runtime-version: '48'
+sdk: org.gnome.Sdk
+command: llamachatv1
+
+finish-args:
+  - --share=network
+  - --socket=wayland
+  - --socket=x11
+  - --share=ipc
+  - --device=dri
+  - --filesystem=home
+  - --talk-name=org.freedesktop.portal.Desktop
+  - --talk-name=org.freedesktop.portal.FileChooser
+
+modules:
+  - name: llamachatv1
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 llamachatv1 /app/bin/llamachatv1
+      - install -Dm644 com.claudetractor.llamachatv1.desktop
+          /app/share/applications/com.claudetractor.llamachatv1.desktop
+      - install -Dm644 icon128.png
+          /app/share/icons/hicolor/128x128/apps/com.claudetractor.llamachatv1.png
+      - install -Dm644 icon512.png
+          /app/share/icons/hicolor/512x512/apps/com.claudetractor.llamachatv1.png
+    sources:
+      - type: file
+        path: ../src-tauri/target/release/llamachatv1
+        dest-filename: llamachatv1
+      - type: file
+        path: ../src-tauri/icons/128x128.png
+        dest-filename: icon128.png
+      - type: file
+        path: ../src-tauri/icons/icon.png
+        dest-filename: icon512.png
+      - type: file
+        path: com.claudetractor.llamachatv1.desktop
