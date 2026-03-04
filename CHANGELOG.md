@@ -5,6 +5,15 @@ Last updated: 2026-03-04
 
 ---
 
+## v0.12.0 — 2026-03-04
+
+### New Features
+- **Real-time tokens per second (TK/S) display** — The token counter now shows live output token count and generation speed while the model is streaming a response (e.g. "156 tokens · 31.2 tk/s"). Updates every 250 ms during generation. After streaming finishes, the counter shows final stats using actual API-reported token counts when available, falling back to event-counted tokens otherwise.
+- **Actual API token counts** — All five providers (Ollama, OpenAI-compatible, Anthropic, Google, OpenAI) now report real token usage data from their streaming responses. Ollama provides `eval_count`, `prompt_eval_count`, and `eval_duration`; Anthropic reports `input_tokens`/`output_tokens` via `message_start`/`message_delta` events; Google reports via `usageMetadata`; OpenAI uses `stream_options: { include_usage: true }` for final-chunk usage. The Rust backend extracts this data and emits a `chat-usage` event to the frontend before `chat-done`.
+- **Accurate Ollama TK/S** — When using Ollama, tokens per second is calculated from the server-reported `eval_duration` (nanoseconds) rather than wall-clock time, giving a more accurate measure that excludes network latency.
+
+---
+
 ## v0.11.2 — 2026-03-04
 
 ### Bug Fixes
@@ -487,7 +496,7 @@ Last updated: 2026-03-04
 
 *This document is updated with each new version of LlamaTalk Desktop.*
 
-*Last updated: 2026-03-04 (v0.11.2)*
+*Last updated: 2026-03-04 (v0.12.0)*
 
 ---
 
