@@ -5,6 +5,13 @@ Last updated: 2026-03-04
 
 ---
 
+## v0.11.1 — 2026-03-04
+
+### Bug Fixes
+- **Fixed streaming responses showing blank text** — Streaming tokens from the Rust backend were emitted as window-level events, but the frontend listened for app-level events. Tokens now emit globally so all windows receive them correctly. Fixes blank responses when using llama.cpp and other backends.
+
+---
+
 ## v0.11.0 — 2026-03-04
 
 ### New Features
