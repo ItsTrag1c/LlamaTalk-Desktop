@@ -1,27 +1,48 @@
 # LlamaTalk Desktop — Changelog
 
 A running history of all features, fixes, and improvements made to LlamaTalk Desktop.
-Last updated: 2026-03-05
+Last updated: 2026-03-06
+
+---
+
+## v0.15.0 — 2026-03-06
+
+### Security
+- **API keys moved to OS credential store** — API keys for Anthropic, Google, and OpenAI are now stored in the Windows Credential Manager (or macOS Keychain) instead of localStorage. Existing keys are migrated automatically on first launch. Keys are no longer accessible via browser DevTools.
+- **Google API key moved to request header** — The Google Gemini API key is now sent via the `x-goog-api-key` HTTP header instead of as a URL query parameter, preventing it from appearing in server logs or browser history.
+- **Cloud API domain allowlist** — All outbound cloud API calls are now validated against a strict HTTPS domain allowlist (api.anthropic.com, generativelanguage.googleapis.com, api.openai.com). Prevents SSRF through crafted API URLs.
+- **Download URL validation** — Remote update downloads are now restricted to github.com and objects.githubusercontent.com over HTTPS. HTTP redirects are disabled on cloud API calls.
+- **Checksum verification hardened** — Update installer checksum verification now fails closed: downloads are rejected if the checksum file cannot be fetched, the installer filename is missing from the checksum list, or the hash does not match.
+- **Installer path validation** — The `launch_installer` command now validates that the file has a LlamaTalk filename pattern and resides in the temp or install directory before execution.
+- **PIN rate limiting** — Failed PIN attempts now trigger progressive lockout (5s after 5 attempts, up to 60s after 8+), preventing brute-force attacks.
+- **Credential store key allowlist** — The credential store backend now only accepts a fixed set of known key names, preventing arbitrary key storage.
+- **IPv6 and 0.0.0.0 blocking** — Local server URL validation now also blocks 0.0.0.0, [::1], and [::] addresses.
+
+### Improvements
+- **Cross-platform build targets** — Build configuration now targets all platforms (Windows NSIS/MSI + macOS DMG/app) instead of macOS-only, fixing Windows builds after the macOS release.
+- **Platform-aware file paths** — The deletion log path now uses the correct path separator on both Windows and macOS.
 
 ---
 
 ## v0.14.1 — 2026-03-05
 
 ### Bug Fixes
-- **macOS version display** — App now shows "macOS" or "Windows" suffix in version number
-- **Update button for macOS** — Download button now pulls macOS DMG from GitHub releases
-- **System Tray label** — Changed to "Dock" on macOS, "System Tray" on Windows
-- **App doesn't close on macOS update** — Downloading DMG no longer exits the app
+- **macOS version display** — The sidebar version number now shows a "macOS" or "Windows" suffix so you can tell which platform build you're running at a glance.
+- **macOS update button** — The update button now downloads the macOS DMG from GitHub releases instead of the Windows installer. Downloading no longer exits the app on macOS — the DMG opens for drag-and-drop installation while the app keeps running.
+- **System Tray label** — The Settings label now reads "Dock" on macOS and "System Tray" on Windows, matching each platform's terminology.
 
 ---
 
 ## v0.14.0 — 2026-03-05
 
 ### New Features
-- **macOS support** — LlamaTalk Desktop now runs on macOS 12.0+ (Monterey and later). Supports both Apple Silicon (M1+) and Intel Macs. Includes all features from the Windows version except the Llama Assistant floating window (Windows only).
+- **macOS support** — LlamaTalk Desktop now runs on macOS 12.0+ (Monterey and later). Supports both Apple Silicon (M1+) and Intel Macs. Includes all features from the Windows version except the Llama Assistant floating window (Windows only). Install via the DMG from [Releases](https://github.com/ItsTrag1c/LlamaTalk-Desktop/releases/latest).
+- **macOS Keychain integration** — Sensitive credentials (PIN hash, security question hashes, encryption key) are stored in the macOS Keychain instead of Windows Credential Manager, using the same secure `keyring` interface.
 
-### Bug Fixes
-- **Keychain integration** — Credentials now stored in macOS Keychain on Apple Silicon/Intel builds instead of Windows Credential Manager.
+### Improvements
+- **App identifier updated** — Changed from legacy `com.claudetractor.llamachatv1` to `com.llamatalk.desktop`.
+- **Platform-aware document opening** — Bundled PDFs (Goals, Privacy Policy) now open with `open` on macOS and `cmd /c start` on Windows.
+- **README updated** — Added macOS install instructions, DMG download table, and platform-specific feature notes.
 
 ---
 
@@ -535,7 +556,7 @@ Last updated: 2026-03-05
 
 *This document is updated with each new version of LlamaTalk Desktop.*
 
-*Last updated: 2026-03-04 (v0.13.0)*
+*Last updated: 2026-03-06 (v0.15.0)*
 
 ---
 
@@ -548,7 +569,7 @@ Last updated: 2026-03-05
 ### Near-Term Features
 
 - **Project website** — A dedicated web presence for LlamaTalk with download links, a changelog, project goals, and contact information
-- **Cross-platform builds** — macOS and Linux versions of LlamaTalk in development
+- **Linux support** — Arch Linux / Linux builds in development
 
 ---
 
