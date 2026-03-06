@@ -1,7 +1,7 @@
 # LlamaTalk — Privacy Policy
 
 **Effective Date:** March 2, 2026
-**Last Updated:** March 4, 2026 (rev. 5)
+**Last Updated:** March 6, 2026 (rev. 6)
 
 ---
 
@@ -21,7 +21,7 @@ LlamaTalk Desktop stores the following data **locally on your device only**:
 
 - **Profile credentials** — Your PIN hash and security question hashes are stored in the **Windows Credential Manager**, a secure OS-level keystore. Your username and non-sensitive settings are stored in the app's localStorage.
 - **Conversations** — Full message history of all your chats, stored in localStorage. When a profile with a PIN is active, conversations are **encrypted at rest** using AES-256-GCM. The encryption key is stored in Windows Credential Manager — it never touches the filesystem.
-- **Cloud API keys** — Stored in localStorage on this device only. Keys are sent exclusively to their respective AI provider over HTTPS and are never included in profile exports.
+- **Cloud API keys** — Stored in the **Windows Credential Manager** (or macOS Keychain), the same secure OS-level keystore used for your PIN. Keys are sent exclusively to their respective AI provider over HTTPS and are never included in profile exports.
 - **Export audit trail** — Timestamp of your most recent profile export (`lastExportTime`), displayed in Settings.
 - **Settings** — Your preferences including:
   - Ollama server URL
@@ -145,8 +145,9 @@ GitHub will log the IP address of the request as with any public API call — th
 - **PIN Hashing** — PINs in both apps are hashed with PBKDF2 (100,000 iterations, SHA-256, random 16-byte per-user salt). Your plaintext PIN is never stored. Legacy hashes from earlier versions are automatically migrated to PBKDF2.
 - **PIN Minimum Length (CLI)** — PINs must be at least 4 characters. Both the setup wizard and the PIN change command enforce this minimum.
 - **Timing-Safe PIN Comparison (CLI)** — PIN verification uses `crypto.timingSafeEqual` to prevent timing side-channel attacks.
-- **Credential Storage (Desktop)** — PIN and security question hashes are stored in Windows Credential Manager, a secure OS-level keystore, rather than in the app's localStorage.
+- **Credential Storage (Desktop)** — PIN hashes, security question hashes, the conversation encryption key, and cloud API keys are all stored in the OS credential store (Windows Credential Manager / macOS Keychain) rather than in the app's localStorage. A strict allowlist limits which keys the app can read or write.
 - **Security Questions (Desktop)** — Security question answers are hashed with SHA-256 and a unique salt before storage. Plaintext answers are never stored.
+- **PIN Rate Limiting (Desktop)** — After repeated failed PIN attempts, progressive lockout delays (5 s → 15 s → 30 s → 60 s) are enforced to resist brute-force attacks.
 - **Session Inactivity Timeout (CLI)** — After a configurable period of inactivity (default: 30 minutes), the session locks and requires PIN re-entry before continuing. This prevents unattended terminals from remaining unlocked.
 
 ### Network & Application Security
@@ -156,7 +157,8 @@ GitHub will log the IP address of the request as with any public API call — th
 - **Request Timeouts** — All network calls have enforced timeouts to prevent indefinite hangs (Ollama: 120s, cloud providers: 60s, connection checks: 10–15s).
 - **Content Security Policy (Desktop)** — Strict CSP prevents inline scripts, eval(), and unauthorized network connections.
 - **Capability Scoping (Desktop)** — Tauri capabilities limit what file and system operations the app can perform to the minimum required.
-- **Update Integrity** — Software updates downloaded from GitHub are verified against SHA-256 checksums before being applied.
+- **Cloud URL Allowlist (Desktop)** — Outbound API requests are restricted to a hardcoded domain allowlist (Anthropic, Google, OpenAI endpoints). Requests to unlisted domains are rejected. HTTP redirects are disabled to prevent redirect-based SSRF.
+- **Update Integrity** — Software updates downloaded from GitHub are verified against SHA-256 checksums using a fail-closed model: if the checksum cannot be retrieved or does not match, the download is rejected. The release URL is validated against a strict GitHub domain pattern before any download begins.
 - **Stream Cancellation** — Both apps support cancelling an in-progress response. Desktop's Stop button and CLI's Esc key immediately cancel the active stream on the server side, ensuring no orphaned requests continue. Partial responses are preserved in the conversation.
 - **API Key Exclusion from Exports** — Cloud API keys are stripped from all exported profile files in both apps.
 - **Import Validation** — Imported profiles are validated for type, format, and value constraints before being applied. The CLI restricts imports to `.json` files only.
@@ -241,6 +243,7 @@ LlamaTalk is designed with privacy-by-default principles consistent with:
 - **2026-03-03 (rev. 3)** — Major update for Desktop v0.10.0 and CLI v0.6.0. Added conversation encryption at rest (Desktop: AES-256-GCM, key in Credential Manager). Added API key and history encryption (CLI: AES-256-GCM, PIN-derived key). Documented Windows Credential Manager usage for Desktop credentials. Added CLI session inactivity timeout. Added CLI PIN minimum length. Added CLI file permissions (icacls). Added CLI `.json`-only import restriction. Reorganized Security Measures into Encryption & Security with subsections. Updated Data You Control with encryption control. Updated Legal Compliance with encryption and storage limitation references.
 - **2026-03-04 (rev. 4)** — Added Automatic Update Checks section documenting the startup GitHub API check in both apps (the only automatic network activity). Clarified "Data We Do NOT Collect" with cross-reference to update check disclosure. Covers Desktop v0.12.1 and CLI v0.8.1.
 - **2026-03-04 (rev. 5)** — Added OpenAI-compatible local server support (llama.cpp, LM Studio, vLLM) to local model privacy section. Renamed "Local Ollama Models" to "Local AI Models" to reflect broader backend support. Added token usage metadata disclosure (used locally for TK/S display, never transmitted). Added `backendType` to Desktop stored settings. Updated stream cancellation to cover both apps (Desktop Stop button + CLI Esc). Updated URL validation to cover all local backends. Covers Desktop v0.12.1 and CLI v0.8.1.
+- **2026-03-06 (rev. 6)** — Desktop v0.15.0 security hardening. Cloud API keys moved from localStorage to OS credential store (Windows Credential Manager / macOS Keychain). Added credential key allowlist. Added PIN rate limiting with progressive lockout. Added cloud URL domain allowlist and disabled HTTP redirects. Updated integrity verification to fail-closed model with GitHub URL validation. Google API keys now sent via header instead of URL parameter. Added macOS Keychain references throughout.
 
 ---
 

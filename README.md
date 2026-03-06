@@ -74,7 +74,7 @@ When a newer version is available, a small orange dot (●) appears on the **Set
 
 ## Privacy
 
-All data is stored locally on your device. Sensitive credentials (PIN hash, security question hashes) are stored in the macOS Keychain / Windows Credential Manager; all other settings live in `localStorage`. Nothing is collected, tracked, or synced to any server. Cloud API keys are stored only on your device and are never exported or transmitted except as part of direct API calls to your chosen provider.
+All data is stored locally on your device. Sensitive credentials — PIN hash, security question hashes, and cloud API keys — are stored in the macOS Keychain / Windows Credential Manager; all other settings live in `localStorage`. Nothing is collected, tracked, or synced to any server. API keys are never exported or transmitted except as part of direct API calls to your chosen provider.
 
 See [PRIVACY_POLICY.md](PRIVACY_POLICY.md) for full details.
 
