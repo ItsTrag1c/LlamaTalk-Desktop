@@ -6,7 +6,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { openPath } from "@tauri-apps/plugin-opener";
 
-const APP_VERSION = "0.13.0";
+const APP_VERSION = "0.14.1";
+let IS_MACOS = false;
+let IS_WINDOWS = false;
 const DEFAULT_URL = "http://localhost:11434";
 
 const CLOUD_MODELS = {
@@ -718,6 +720,19 @@ export default function App() {
       setCredStoreLoaded(true);
     }
     loadCredentials();
+  }, []);
+
+  // Detect platform on startup
+  useEffect(() => {
+    invoke("get_platform").then((platform) => {
+      IS_MACOS = platform === "macos";
+      IS_WINDOWS = platform === "windows";
+    }).catch(() => {
+      // Fallback to navigator
+      const ua = navigator.userAgent;
+      IS_MACOS = ua.includes("Mac");
+      IS_WINDOWS = ua.includes("Windows");
+    });
   }, []);
 
   // Remote update check — fires once at startup, non-blocking
@@ -2440,14 +2455,14 @@ export default function App() {
               ))}
             </div>
 
-            <div className="settings-label">System Tray</div>
+            <div className="settings-label">{IS_MACOS ? "Dock" : "System Tray"}</div>
             <label className="settings-toggle-row">
               <input
                 type="checkbox"
                 checked={draftCloseMinimiesToTray}
                 onChange={(e) => setDraftCloseMinimiesToTray(e.target.checked)}
               />
-              <span>Close button minimizes to tray</span>
+              <span>Close button minimizes to {IS_MACOS ? "Dock" : "tray"}</span>
             </label>
 
             <div className="settings-divider" />
@@ -2539,12 +2554,16 @@ export default function App() {
                 <div className="settings-update-available-row">
                   <span className="settings-update-info">● v{updateAvailable.version} available</span>
                   <button className="settings-privacy-link" onClick={downloadAndInstall}>
-                    Download &amp; Install →
+                    {IS_MACOS ? "Download →" : "Download & Install →"}
                   </button>
                 </div>
               )}
               {downloading && (
-                <div className="settings-update-info">Downloading v{updateAvailable.version}…</div>
+                <div className="settings-update-info">
+                  {IS_MACOS 
+                    ? `Downloading v${updateAvailable.version}… (will open DMG when done)`
+                    : `Downloading v${updateAvailable.version}…`}
+                </div>
               )}
               {downloadError && (
                 <div className="settings-update-info" style={{ color: "var(--red, #ef4444)" }}>
@@ -2563,7 +2582,7 @@ export default function App() {
             </div>
           </div>
         )}
-        <div className="sidebar-version">v{APP_VERSION}</div>
+        <div className="sidebar-version">v{APP_VERSION} {IS_MACOS ? "macOS" : IS_WINDOWS ? "Windows" : ""}</div>
       </aside>
 
       {/* Main */}

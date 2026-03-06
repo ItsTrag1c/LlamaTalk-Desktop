@@ -5,6 +5,16 @@ Last updated: 2026-03-05
 
 ---
 
+## v0.14.1 — 2026-03-05
+
+### Bug Fixes
+- **macOS version display** — App now shows "macOS" or "Windows" suffix in version number
+- **Update button for macOS** — Download button now pulls macOS DMG from GitHub releases
+- **System Tray label** — Changed to "Dock" on macOS, "System Tray" on Windows
+- **App doesn't close on macOS update** — Downloading DMG no longer exits the app
+
+---
+
 ## v0.14.0 — 2026-03-05
 
 ### New Features

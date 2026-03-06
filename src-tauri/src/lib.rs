@@ -347,7 +347,7 @@ async fn check_for_update_remote(current_version: String) -> Option<String> {
 }
 
 #[tauri::command]
-async fn download_and_install(app: tauri::AppHandle, url: String, version: String, checksum_url: String) -> Result<(), String> {
+async fn download_and_install(_app: tauri::AppHandle, url: String, version: String, checksum_url: String) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .build()
@@ -408,35 +408,37 @@ async fn download_and_install(app: tauri::AppHandle, url: String, version: Strin
             .args(["/c", "start", "", dest.to_str().unwrap_or_default()])
             .spawn()
             .map_err(|e| e.to_string())?;
+        flush_and_exit(&app);
     }
     #[cfg(target_os = "macos")]
     {
+        // On macOS, open the DMG (shows installer window) but don't exit
         std::process::Command::new("open")
             .arg(dest)
             .spawn()
             .map_err(|e| e.to_string())?;
     }
-    flush_and_exit(&app);
     Ok(())
 }
 
 #[tauri::command]
-fn launch_installer(app: tauri::AppHandle, path: String) -> Result<(), String> {
+fn launch_installer(_app: tauri::AppHandle, path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("cmd")
             .args(["/c", "start", "", &path])
             .spawn()
             .map_err(|e| e.to_string())?;
+        flush_and_exit(&app);
     }
     #[cfg(target_os = "macos")]
     {
+        // On macOS, open the DMG but don't exit the app
         std::process::Command::new("open")
             .arg(&path)
             .spawn()
             .map_err(|e| e.to_string())?;
     }
-    flush_and_exit(&app);
     Ok(())
 }
 
@@ -805,6 +807,16 @@ fn extract_usage(
 }
 
 #[tauri::command]
+fn get_platform() -> String {
+    #[cfg(target_os = "macos")]
+    return "macos".to_string();
+    #[cfg(target_os = "windows")]
+    return "windows".to_string();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    return "unknown".to_string();
+}
+
+#[tauri::command]
 fn cancel_stream(
     state: tauri::State<'_, StreamCancellationState>,
     stream_id: String,
@@ -964,7 +976,8 @@ pub fn run() {
             cred_delete,
             detect_backend,
             stream_chat,
-            cancel_stream
+            cancel_stream,
+            get_platform
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
